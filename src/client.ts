@@ -1,4 +1,4 @@
-import type { Config } from './config.js';
+import { type Config, loginHint } from './config.js';
 
 /** A failed call, with a message written for the agent reading it. */
 export class WarehouseError extends Error {
@@ -69,14 +69,24 @@ export class WarehouseClient {
           continue;
         }
       }
-      throw new WarehouseError(explain(response.status, body, retryAfterS), response.status);
+      throw new WarehouseError(explain(response.status, body, retryAfterS, this.config.url), response.status);
     }
   }
 }
 
-function explain(status: number, body: { error?: string; needs_reauth?: boolean }, retryAfterS: number): string {
+function explain(
+  status: number,
+  body: { error?: string; needs_reauth?: boolean },
+  retryAfterS: number,
+  origin: string,
+): string {
   const detail = (body.error ?? 'no detail').replace(/\.$/, '');
-  if (status === 401) return 'The warehouse rejected the token (401). Check the stored read token.';
+  if (status === 401) {
+    return (
+      `The warehouse rejected the token (401): it is wrong, revoked or expired. To sign in again with Spotify, ${loginHint(origin)}. ` +
+      'A MUSIC_WAREHOUSE_TOKEN or Keychain token takes precedence over a signed-in one, so fix or remove it if set.'
+    );
+  }
   if (status === 403) return `Forbidden (403): ${detail}. A read token can only fetch Wrapped presets or ranges already computed; see list_wrapped_ranges.`;
   if (body.needs_reauth) {
     return "Spotify's grant has lapsed, so live data is unavailable. Stored history still works. The owner must re-run `npm run authorize` in the music-warehouse repo.";

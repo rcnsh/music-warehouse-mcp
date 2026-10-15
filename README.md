@@ -19,8 +19,10 @@ aggregation.
 
 ## Requirements
 
-- A deployed music-warehouse Worker with `READ_TOKEN` set, at a version that
-  has `/api/search` and `/api/top-tracks` (October 2026 or later).
+- A deployed music-warehouse Worker at a version that has `/api/search` and
+  `/api/top-tracks` (October 2026 or later). To sign in with Spotify instead of
+  copying a token, it also needs
+  [Spotify sign-in](https://github.com/rcnsh/music-warehouse#signing-in-with-spotify).
 - Node.js 20 or later.
 
 ## Setting it up
@@ -32,9 +34,27 @@ git clone https://github.com/rcnsh/music-warehouse-mcp && cd music-warehouse-mcp
 npm install          # also builds dist/
 ```
 
-### 2. Store the read token
+### 2. Get a read token
 
-On macOS, put the Worker's `READ_TOKEN` in the Keychain, under the service
+**Sign in with Spotify** (easiest). Use the Spotify account that owns the
+warehouse:
+
+```bash
+npm run login -- --url https://music-api.example.com
+```
+
+It opens your browser (and prints the URL in case it doesn't), and once you
+approve, saves a read token for that warehouse to
+`~/.config/music-warehouse-mcp/tokens.json` (`$XDG_CONFIG_HOME` if set),
+readable only by you. The token is listed on the warehouse as
+`MCP (<hostname>)`; pass `--name` to choose another. It expires after 90 days:
+the tools then say so, and you run the same command again. The server reads
+the file on every call, so a new sign-in needs no restart.
+
+Once installed as a package, the same command is `music-warehouse-mcp login
+--url …`. `--url` defaults to `MUSIC_WAREHOUSE_URL`.
+
+**Or store a token yourself.** On macOS, put the Worker's `READ_TOKEN` in the Keychain, under the service
 `music-warehouse-mcp` and your Worker's host as the account. `security`
 prompts for it, so it never lands in your shell history:
 
@@ -43,7 +63,7 @@ security add-generic-password -s music-warehouse-mcp -a music-api.example.com -w
 ```
 
 Elsewhere, set `MUSIC_WAREHOUSE_TOKEN` in the MCP client's config instead (see
-[Configuration](#configuration)). The environment wins over the Keychain.
+[Configuration](#configuration)). Either one wins over a signed-in token.
 
 ### 3. Add it to your client
 
@@ -89,11 +109,20 @@ answer. Or explore interactively with `npm run inspect`.
 | Variable | Required | |
 |---|---|---|
 | `MUSIC_WAREHOUSE_URL` | yes | The Worker's origin. Must be `https`, except on loopback (`http://127.0.0.1:8787` for `wrangler dev`). |
-| `MUSIC_WAREHOUSE_TOKEN` | no | The read token, if it isn't in the Keychain. Use `READ_TOKEN`, never `ADMIN_TOKEN`: nothing here needs more. |
+| `MUSIC_WAREHOUSE_TOKEN` | no | A read token, overriding the Keychain and a signed-in token. Use a read token, never `ADMIN_TOKEN`: nothing here needs more. |
 | `MUSIC_WAREHOUSE_TZ` | no | IANA zone for local dates and times. Defaults to the system's. |
+| `XDG_CONFIG_HOME` | no | Where `login` saves tokens, under `music-warehouse-mcp/`. Defaults to `~/.config`. |
 
-A missing token doesn't stop the server starting: each tool says how to
-provide one, and the next call picks it up without a restart.
+The token is the first of:
+
+1. `MUSIC_WAREHOUSE_TOKEN`.
+2. The macOS Keychain entry for the Worker's host (service `music-warehouse-mcp`).
+3. The token `npm run login` saved for the Worker's origin. Tokens are saved
+   per origin, so one is only ever sent to the warehouse that minted it.
+
+A missing or expired token doesn't stop the server starting: each tool says how
+to provide one, and the next call picks it up without a restart. A rejected
+token (401) names the login command.
 
 ## Tools
 
@@ -118,7 +147,8 @@ Fourteen tools, all read-only. Dates are `YYYY-MM-DD` local days in the configur
 
 The last three are live and need the Worker's Spotify grant; the rest read
 stored rows and keep working when it lapses. When a tool fails, its message
-says why and what to do: a lapsed grant names `npm run authorize`, a stat
+says why and what to do: a rejected token names `npm run login`, a lapsed
+grant names `npm run authorize` in the music-warehouse repo, a stat
 still computing is waited out (up to 25 s) before giving up.
 
 Responses are trimmed for an agent: no image URLs or Spotify API links, play
@@ -135,9 +165,10 @@ mobile can't use it: their custom connectors need a remote server with OAuth.
 
 ```bash
 npm run build        # tsc → dist/
-npm test             # vitest: the client, formatting, and every tool over an in-memory MCP connection
+npm test             # vitest: the client, formatting, sign-in, and every tool over an in-memory MCP connection
 npm run typecheck    # source and tests
 ```
 
-Tests fake `fetch`, so they need no Worker. `npm run smoke` is the end-to-end
+Tests fake `fetch`, so they need no Worker. The sign-in test runs the real
+loopback listener and plays the browser's redirect itself. `npm run smoke` is the end-to-end
 check against a real one.
