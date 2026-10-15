@@ -4,8 +4,7 @@
 <p>
 <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-blue?style=flat-square"></a>
 <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white">
-<img alt="Node.js 20+" src="https://img.shields.io/badge/node-%E2%89%A520-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
-<a href="https://modelcontextprotocol.io"><img alt="MCP server (stdio)" src="https://img.shields.io/badge/MCP-stdio%20server-black?style=flat-square"></a>
+<a href="https://modelcontextprotocol.io"><img alt="MCP server" src="https://img.shields.io/badge/MCP%20server-000000?style=flat-square&logo=modelcontextprotocol&logoColor=white"></a>
 <a href="https://github.com/rcnsh/music-warehouse#clients"><img alt="Part of music-warehouse" src="https://img.shields.io/badge/part%20of-music--warehouse-1DB954?style=flat-square"></a>
 </p>
 <p><a href="#quick-start">Quick start</a> · <a href="#setup">Setup</a> · <a href="#configuration">Configuration</a> · <a href="#tools">Tools</a> · <a href="#development">Development</a></p>
@@ -255,4 +254,4 @@ the end-to-end check against a real one.
 
 ## Licence
 
-[MIT](LICENSE)
+MIT. See [LICENSE](LICENSE).
