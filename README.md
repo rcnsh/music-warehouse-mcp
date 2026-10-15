@@ -11,6 +11,9 @@ It runs locally over stdio and only reads: every tool calls the Worker's
 `/api/*` routes with a read-only token. The Worker does the storage and
 aggregation.
 
+It is one of several clients of the warehouse; the
+[full list](https://github.com/rcnsh/music-warehouse#clients) is in its README.
+
 - [Requirements](#requirements)
 - [Setting it up](#setting-it-up)
 - [Configuration](#configuration)
