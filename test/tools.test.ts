@@ -48,6 +48,7 @@ describe('tools', () => {
       'top_artists',
       'top_tracks',
       'track_history',
+      'upcoming_concerts',
     ]);
     expect(tools.every((t) => t.annotations?.readOnlyHint)).toBe(true);
   });
@@ -108,6 +109,12 @@ describe('tools', () => {
     });
     expect((await call('top_tracks', { from: '2026-07-01', to: '2026-07-31' })).json().tracks).toEqual([{ id: 'a', name: 'X', artist: 'Y', plays: 26 }]);
     expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({ from: '2026-07-01', to: '2026-07-31', limit: '20', tz: 'Asia/Singapore' });
+  });
+
+  it('upcoming_concerts passes region, since and zone', async () => {
+    const { call, requests } = await connect({ '/api/concerts': () => ({ checked: {}, concerts: [] }) });
+    expect((await call('upcoming_concerts', { region: 'london', since: '2026-10-01' })).json()).toEqual({ checked: {}, concerts: [] });
+    expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({ region: 'london', since: '2026-10-01', tz: 'Asia/Singapore' });
   });
 
   it('daily_play_counts can sum into months with a total', async () => {

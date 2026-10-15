@@ -200,6 +200,23 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
   );
 
   server.registerTool(
+    'upcoming_concerts',
+    {
+      title: 'Upcoming concerts',
+      description:
+        'Upcoming Ticketmaster music events, in Singapore and within 50 km of London, for the ~80 artists played most over ' +
+        'the last year; soonest first, refreshed daily. `since` keeps only events first seen on or after that date, to ' +
+        "answer what's new. An artist absent here may simply not be on Ticketmaster under the same name.",
+      inputSchema: {
+        region: z.enum(['singapore', 'london']).optional().describe('Default both'),
+        since: day.optional().describe('Only events first seen on or after this local date'),
+      },
+      annotations: STORED,
+    },
+    ({ region, since }) => attempt(() => client.get('concerts', { region, since, ...tz })),
+  );
+
+  server.registerTool(
     'on_this_day',
     {
       title: 'On this day in earlier years',
