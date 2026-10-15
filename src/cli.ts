@@ -33,18 +33,24 @@ export async function runCli(command: string, args: string[], env: NodeJS.Proces
     if (name !== undefined && (!name || name.length > 64)) throw new ConfigError('--name must be 1 to 64 characters.');
 
     const tokenFile = tokenFilePath(env);
-    const saved = await login({ url, name, tokenFile });
+    const { saved, storedIn, keychainError } = await login({ url, name, tokenFile });
     const until = saved.expires_ms === null ? 'does not expire' : `valid until ${new Date(saved.expires_ms).toISOString().slice(0, 10)}`;
-    console.log(`Signed in. Saved a read token for ${url} (${saved.name}, ${until}) to ${tokenFile}.`);
+    const host = new URL(url).host;
+    const where =
+      storedIn === 'keychain'
+        ? `the macOS Keychain (service ${KEYCHAIN_SERVICE}, account ${host}), replacing any token there`
+        : storedIn;
+    console.log(`Signed in. Saved a read token for ${url} (${saved.name}, ${until}) to ${where}.`);
+    if (keychainError) console.log(`Note: the Keychain could not take it (${keychainError}), so it is in the file instead.`);
 
     // The explicit sources win, so say if one would hide the new token.
     if (env.MUSIC_WAREHOUSE_TOKEN?.trim()) {
       console.log('Note: MUSIC_WAREHOUSE_TOKEN is set here, and takes precedence over the signed-in token wherever it is set.');
     }
-    if (await keychainToken(new URL(url).host)) {
+    if (storedIn !== 'keychain' && (await keychainToken(host))) {
       console.log(
-        `Note: a Keychain token for ${new URL(url).host} takes precedence over the signed-in token. ` +
-          `Remove it to use this one: security delete-generic-password -s ${KEYCHAIN_SERVICE} -a ${new URL(url).host}`,
+        `Note: a Keychain token for ${host} takes precedence over the signed-in token. ` +
+          `Remove it to use this one: security delete-generic-password -s ${KEYCHAIN_SERVICE} -a ${host}`,
       );
     }
     return 0;

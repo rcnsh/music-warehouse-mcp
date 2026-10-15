@@ -1,11 +1,17 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { readSavedToken, tokenFilePath } from './store.js';
+import {
+  KEYCHAIN_SERVICE,
+  keychainToken,
+  readSavedToken,
+  removeSavedToken,
+  saveKeychainToken,
+  tokenFilePath,
+  useKeychain,
+} from './store.js';
 
-const run = promisify(execFile);
+export { KEYCHAIN_SERVICE, keychainToken };
 
-/** The macOS Keychain service the read token is stored under; the account is the Worker's host. */
-export const KEYCHAIN_SERVICE = 'music-warehouse-mcp';
+/** How long a Keychain miss is remembered before `security` is asked again. */
+export const KEYCHAIN_MISS_TTL_MS = 30_000;
 
 /** How to sign in to a warehouse, for messages. */
 export function loginHint(origin: string): string {
@@ -22,11 +28,18 @@ export interface Config {
    * the token saved by signing in.
    */
   token: () => Promise<string>;
+  /** Drop any cached token, after the warehouse rejected it, so the next call looks again. */
+  forgetToken?: () => void;
 }
 
 export interface LoadOptions {
   /** Looks up the Keychain entry for a host. */
   keychain?: (host: string) => Promise<string | null>;
+  /**
+   * Stores a token in the Keychain, used to move a token saved in the file
+   * there. Null where there is no Keychain. Defaults to the Keychain on macOS.
+   */
+  keychainSave?: ((host: string, token: string) => Promise<void>) | null;
   /** Where signing in saves tokens. */
   tokenFile?: string;
   now?: () => number;
@@ -44,17 +57,6 @@ function isValidTimeZone(zone: string): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-/** The token from the Keychain, or null if there is none (or no Keychain). */
-export async function keychainToken(host: string): Promise<string | null> {
-  if (process.platform !== 'darwin') return null;
-  try {
-    const { stdout } = await run('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', host, '-w']);
-    return stdout.trim() || null;
-  } catch {
-    return null;
   }
 }
 
@@ -80,29 +82,56 @@ export function parseWarehouseUrl(raw: string | undefined, label = 'MUSIC_WAREHO
  * starts and each tool says what to fix.
  *
  * An explicit token (environment, then Keychain) wins over one saved by
- * signing in. The Keychain answer is kept once found; the saved file is read
- * on every call, so signing in again needs no restart.
+ * signing in. A Keychain hit is kept until the warehouse rejects it (401); a
+ * miss is remembered for 30 s, so `security` doesn't run on every call but a
+ * new token is still found without a restart. The saved file is read on every
+ * call that gets that far.
+ *
+ * On macOS a token found in the file (from an older sign-in) is moved to the
+ * Keychain: stored, read back, and only then removed from the file.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, options: LoadOptions = {}): Config {
   const origin = parseWarehouseUrl(env.MUSIC_WAREHOUSE_URL);
   const host = new URL(origin).host;
   const keychain = options.keychain ?? keychainToken;
+  const keychainSave = options.keychainSave === undefined ? (useKeychain() ? saveKeychainToken : null) : options.keychainSave;
   const tokenFile = options.tokenFile ?? tokenFilePath(env);
   const now = options.now ?? Date.now;
 
   const timeZone = env.MUSIC_WAREHOUSE_TZ?.trim() || systemTimeZone();
   if (!isValidTimeZone(timeZone)) throw new ConfigError(`MUSIC_WAREHOUSE_TZ is not an IANA zone: ${timeZone}`);
 
-  let fromKeychain: Promise<string | null> | null = null;
+  let fromKeychain: { result: Promise<string | null>; at: number } | null = null;
+  let migrating: Promise<void> | null = null;
+
+  const lookUpKeychain = async (): Promise<string | null> => {
+    if (fromKeychain) {
+      const cached = await fromKeychain.result;
+      if (cached || now() - fromKeychain.at < KEYCHAIN_MISS_TTL_MS) return cached;
+    }
+    const lookup = { result: keychain(host), at: now() };
+    fromKeychain = lookup;
+    return lookup.result;
+  };
+
+  const moveToKeychain = (token: string): Promise<void> =>
+    (migrating ??= (async () => {
+      if (!keychainSave) return;
+      try {
+        await keychainSave(host, token);
+        await removeSavedToken(origin, tokenFile);
+        fromKeychain = { result: Promise.resolve(token), at: now() };
+      } catch {
+        // Left in the file, which still works; tried again after a restart.
+      }
+    })());
+
   const token = async () => {
     const fromEnv = env.MUSIC_WAREHOUSE_TOKEN?.trim();
     if (fromEnv) return fromEnv;
 
-    // A miss is retried next time, so storing the token needs no restart.
-    fromKeychain ??= keychain(host);
-    const stored = await fromKeychain;
+    const stored = await lookUpKeychain();
     if (stored) return stored;
-    fromKeychain = null;
 
     let saved;
     try {
@@ -111,7 +140,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, options: LoadOp
       throw new ConfigError(`Could not read ${tokenFile}: ${(error as Error).message}. To sign in again, ${loginHint(origin)}.`);
     }
     if (saved) {
-      if (saved.expires_ms === null || saved.expires_ms > now()) return saved.token;
+      if (saved.expires_ms === null || saved.expires_ms > now()) {
+        await moveToKeychain(saved.token);
+        return saved.token;
+      }
       throw new ConfigError(
         `The signed-in token for ${origin} expired on ${new Date(saved.expires_ms).toISOString().slice(0, 10)}. ` +
           `To sign in again, ${loginHint(origin)}.`,
@@ -124,5 +156,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, options: LoadOp
     );
   };
 
-  return { url: origin, timeZone, token };
+  return {
+    url: origin,
+    timeZone,
+    token,
+    forgetToken: () => {
+      fromKeychain = null;
+    },
+  };
 }

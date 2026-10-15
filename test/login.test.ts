@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, rm, stat } from 'node:fs/promises';
+import { access, chmod, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,13 +8,14 @@ import { loadConfig } from '../src/config.js';
 import {
   createPkce,
   deviceName,
+  escapeHtml,
   exchangeCode,
   listenForCallback,
   login,
   loginUrl,
   parseCallback,
 } from '../src/login.js';
-import { readSavedToken, saveToken, tokenFilePath } from '../src/store.js';
+import { readSavedToken, removeSavedToken, saveToken, tokenFilePath, useKeychain } from '../src/store.js';
 
 const ORIGIN = 'https://warehouse.test';
 
@@ -95,6 +96,16 @@ describe('the callback', () => {
     await expect(callback.result).rejects.toThrow(/cancelled/);
   });
 
+  it('escapes what it puts in the page, including an error the URL carried', async () => {
+    expect(escapeHtml(`<b a="1">&'`)).toBe('&#60;b a=&#34;1&#34;&#62;&#38;&#39;');
+    const callback = await listenForCallback(10_000);
+    callback.result.catch(() => {});
+    const answer = await fetch(`${callback.returnTo}?error=${encodeURIComponent('<script>alert(1)</script>')}`);
+    const html = await answer.text();
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&#60;script&#62;alert(1)&#60;/script&#62;');
+  });
+
   it('times out', async () => {
     const callback = await listenForCallback(20);
     await expect(callback.result).rejects.toThrow(/No answer from the browser/);
@@ -136,13 +147,57 @@ describe('login, end to end against a stubbed warehouse', () => {
     };
     const log = vi.fn();
 
-    const saved = await login({ url: ORIGIN, name: 'MCP (box)', fetch: fetch as typeof globalThis.fetch, open, log, tokenFile, now: () => 1 });
+    const { saved, storedIn } = await login({
+      url: ORIGIN,
+      name: 'MCP (box)',
+      fetch: fetch as typeof globalThis.fetch,
+      open,
+      log,
+      tokenFile,
+      keychainSave: null,
+      now: () => 1,
+    });
 
     expect(saved).toEqual({ token: 'signed-in', id: 'id1', name: 'MCP (box)', expires_ms: 9e12, saved_ms: 1 });
+    expect(storedIn).toBe(tokenFile);
     expect(log.mock.calls[0]![0]).toContain('https://warehouse.test/auth/login?');
     expect(await readSavedToken(ORIGIN, tokenFile)).toEqual(saved);
     expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
     expect((await stat(join(dir, 'music-warehouse-mcp'))).mode & 0o777).toBe(0o700);
+  });
+});
+
+describe('login, storing the token', () => {
+  const minted = { id: 'id1', token: 'signed-in', name: 'MCP (box)', access: 'read', expires_ms: 9e12 };
+  const run = (keychainSave: ((host: string, token: string) => Promise<void>) | null) =>
+    login({
+      url: ORIGIN,
+      fetch: (async () => reply(minted)) as typeof globalThis.fetch,
+      open: async (url: string) => void (await globalThis.fetch(`${new URL(url).searchParams.get('return_to')}?code=c`)),
+      log: () => {},
+      tokenFile,
+      keychainSave,
+    });
+
+  it('puts it in the Keychain where there is one, and removes an older copy from the file', async () => {
+    await saveToken(ORIGIN, { token: 'older', id: '0', name: 'n', expires_ms: null, saved_ms: 0 }, tokenFile);
+    const keychainSave = vi.fn(async () => {});
+    expect((await run(keychainSave)).storedIn).toBe('keychain');
+    expect(keychainSave).toHaveBeenCalledWith('warehouse.test', 'signed-in');
+    await expect(access(tokenFile)).rejects.toThrow();
+  });
+
+  it('falls back to the file when the Keychain refuses, and says why', async () => {
+    const result = await run(async () => {
+      throw new Error('denied');
+    });
+    expect(result).toMatchObject({ storedIn: tokenFile, keychainError: 'denied' });
+    expect((await readSavedToken(ORIGIN, tokenFile))?.token).toBe('signed-in');
+  });
+
+  it('uses the Keychain only on macOS, and never when turned off', () => {
+    expect(useKeychain({ MUSIC_WAREHOUSE_KEYCHAIN: 'off' })).toBe(false);
+    expect(useKeychain({})).toBe(process.platform === 'darwin');
   });
 });
 
@@ -162,6 +217,19 @@ describe('the token file', () => {
     expect(await readSavedToken('https://three.test', tokenFile)).toBeNull();
     expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
   });
+
+  it('removes one warehouse token, and the file with the last', async () => {
+    const entry = { token: 'a', id: '1', name: 'n', expires_ms: null, saved_ms: 0 };
+    await removeSavedToken('https://one.test', tokenFile);
+    await saveToken('https://one.test', entry, tokenFile);
+    await saveToken('https://two.test', entry, tokenFile);
+    await removeSavedToken('https://one.test', tokenFile);
+    expect(await readSavedToken('https://one.test', tokenFile)).toBeNull();
+    expect(await readSavedToken('https://two.test', tokenFile)).not.toBeNull();
+    expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
+    await removeSavedToken('https://two.test', tokenFile);
+    await expect(access(tokenFile)).rejects.toThrow();
+  });
 });
 
 describe('token precedence', () => {
@@ -174,11 +242,67 @@ describe('token precedence', () => {
     expect(await loadConfig(env({ MUSIC_WAREHOUSE_TOKEN: 'from-env' }), { keychain, tokenFile }).token()).toBe('from-env');
     expect(keychain).not.toHaveBeenCalled();
     expect(await loadConfig(env(), { keychain, tokenFile }).token()).toBe('from-keychain');
-    expect(await loadConfig(env(), { keychain: async () => null, tokenFile }).token()).toBe('from-login');
+    expect(await loadConfig(env(), { keychain: async () => null, keychainSave: null, tokenFile }).token()).toBe('from-login');
+  });
+
+  it('remembers a Keychain miss for 30 s, then asks again', async () => {
+    let clock = 0;
+    let stored: string | null = null;
+    const keychain = vi.fn(async () => stored);
+    const config = loadConfig(env(), { keychain, keychainSave: null, tokenFile, now: () => clock });
+    await expect(config.token()).rejects.toThrow(/No read token/);
+    await expect(config.token()).rejects.toThrow(/No read token/);
+    expect(keychain).toHaveBeenCalledTimes(1);
+    stored = 'new';
+    clock = 29_999;
+    await expect(config.token()).rejects.toThrow(/No read token/);
+    clock = 30_000;
+    expect(await config.token()).toBe('new');
+    expect(keychain).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a Keychain hit until the warehouse rejects it', async () => {
+    let stored = 'old';
+    const keychain = vi.fn(async () => stored);
+    const fetch = vi.fn(async () => reply({ error: 'Unauthorized' }, 401));
+    const config = loadConfig(env(), { keychain, keychainSave: null, tokenFile, now: () => 0 });
+    const client = new WarehouseClient(config, { fetch: fetch as typeof globalThis.fetch });
+    expect(await config.token()).toBe('old');
+    expect(await config.token()).toBe('old');
+    expect(keychain).toHaveBeenCalledTimes(1);
+    stored = 'replaced';
+    await expect(client.get('search')).rejects.toThrow(/401/);
+    expect(await config.token()).toBe('replaced');
+    expect(keychain).toHaveBeenCalledTimes(2);
+  });
+
+  it('moves a token from the file into the Keychain, removing it from the file only once stored', async () => {
+    await saved('from-file', null);
+    const keychainSave = vi.fn(async () => {});
+    const keychain = vi.fn(async () => null);
+    const config = loadConfig(env(), { keychain, keychainSave, tokenFile });
+    expect(await config.token()).toBe('from-file');
+    expect(keychainSave).toHaveBeenCalledWith('warehouse.test', 'from-file');
+    await expect(access(tokenFile)).rejects.toThrow();
+    // Served from memory now: the Keychain has it.
+    expect(await config.token()).toBe('from-file');
+    expect(keychainSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the file when the Keychain will not take the token', async () => {
+    await saved('from-file', null);
+    const keychainSave = vi.fn(async () => {
+      throw new Error('denied');
+    });
+    const config = loadConfig(env(), { keychain: async () => null, keychainSave, tokenFile });
+    expect(await config.token()).toBe('from-file');
+    expect((await readSavedToken(ORIGIN, tokenFile))?.token).toBe('from-file');
+    expect(await config.token()).toBe('from-file');
+    expect(keychainSave).toHaveBeenCalledTimes(1);
   });
 
   it('picks up a new sign-in without a restart', async () => {
-    const config = loadConfig(env(), { keychain: async () => null, tokenFile });
+    const config = loadConfig(env(), { keychain: async () => null, keychainSave: null, tokenFile });
     await expect(config.token()).rejects.toThrow(/npm run login -- --url https:\/\/warehouse\.test/);
     await saved('first', null);
     expect(await config.token()).toBe('first');
@@ -188,14 +312,14 @@ describe('token precedence', () => {
 
   it('refuses an expired signed-in token and says to sign in again', async () => {
     await saved('old', 1000);
-    const config = loadConfig(env(), { keychain: async () => null, tokenFile, now: () => 2000 });
+    const config = loadConfig(env(), { keychain: async () => null, keychainSave: null, tokenFile, now: () => 2000 });
     await expect(config.token()).rejects.toThrow(/expired on 1970-01-01.*npm run login/);
   });
 
   it('sends the signed-in token, and a 401 points at login', async () => {
     await saved('signed-in', null);
     const fetch = vi.fn(async (_url: URL | string | Request, _init?: RequestInit) => reply({ error: 'Unauthorized' }, 401));
-    const client = new WarehouseClient(loadConfig(env(), { keychain: async () => null, tokenFile }), {
+    const client = new WarehouseClient(loadConfig(env(), { keychain: async () => null, keychainSave: null, tokenFile }), {
       fetch: fetch as typeof globalThis.fetch,
     });
     await expect(client.get('search')).rejects.toThrow(/401.*npm run login -- --url https:\/\/warehouse\.test/);
