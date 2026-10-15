@@ -46,6 +46,7 @@ describe('tools', () => {
       'search',
       'spotify_top',
       'top_artists',
+      'top_tracks',
       'track_history',
     ]);
     expect(tools.every((t) => t.annotations?.readOnlyHint)).toBe(true);
@@ -99,6 +100,14 @@ describe('tools', () => {
     });
     expect(requests[0]!.searchParams.get('tz')).toBe('Asia/Singapore');
     expect(await call('artist_history', {})).toMatchObject({ isError: true, text: 'Give an id or a name.' });
+  });
+
+  it('top_tracks passes the range and zone and strips art', async () => {
+    const { call, requests } = await connect({
+      '/api/top-tracks': () => ({ from: '2026-07-01', to: '2026-07-31', tz: 'Asia/Singapore', tracks: [{ id: 'a', name: 'X', artist: 'Y', plays: 26, image: 'u' }] }),
+    });
+    expect((await call('top_tracks', { from: '2026-07-01', to: '2026-07-31' })).json().tracks).toEqual([{ id: 'a', name: 'X', artist: 'Y', plays: 26 }]);
+    expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({ from: '2026-07-01', to: '2026-07-31', limit: '20', tz: 'Asia/Singapore' });
   });
 
   it('daily_play_counts can sum into months with a total', async () => {

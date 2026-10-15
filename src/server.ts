@@ -9,7 +9,8 @@ function instructions(config: Config): string {
   return [
     "Tools over one person's Spotify listening history, stored by their music-warehouse Worker since long before Spotify's own 50-play window.",
     `Dates and times are local to ${config.timeZone}; today is ${today(config.timeZone)}.`,
-    'Start from search to turn an artist or song name into an id. Prefer the aggregate tools (top_artists, daily_play_counts, get_stat, get_wrapped, artist_history, track_history) over paging get_plays.',
+    'Start from search to turn an artist or song name into an id.',
+    'For the top songs or artists in any date range (a month, a week, last year) use top_tracks or top_artists: get_wrapped only takes the ranges list_wrapped_ranges returns, and get_stat top-over-time is per quarter. Prefer these aggregate tools over paging get_plays.',
     'Stored-history tools work even when the Spotify grant has lapsed; now_playing, recently_played_live and spotify_top do not.',
   ].join('\n');
 }

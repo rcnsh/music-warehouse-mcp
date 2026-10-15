@@ -75,7 +75,7 @@ export class WarehouseClient {
 }
 
 function explain(status: number, body: { error?: string; needs_reauth?: boolean }, retryAfterS: number): string {
-  const detail = body.error ?? 'no detail';
+  const detail = (body.error ?? 'no detail').replace(/\.$/, '');
   if (status === 401) return 'The warehouse rejected the token (401). Check the stored read token.';
   if (status === 403) return `Forbidden (403): ${detail}. A read token can only fetch Wrapped presets or ranges already computed; see list_wrapped_ranges.`;
   if (body.needs_reauth) {

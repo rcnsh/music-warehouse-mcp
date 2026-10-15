@@ -20,6 +20,7 @@ const calls = [
   ['search', { query: 'shelter', limit: 3 }],
   ['get_plays', { limit: 3 }],
   ['top_artists', { limit: 3 }],
+  ['top_tracks', { from: '2026-07-01', to: '2026-07-31', limit: 3 }],
   ['daily_play_counts', { from: '2026-01-01', group_by: 'month' }],
   ['on_this_day', {}],
   ['get_stat', { name: 'on-repeat' }],

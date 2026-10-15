@@ -122,6 +122,24 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
   );
 
   server.registerTool(
+    'top_tracks',
+    {
+      title: 'Top songs over a date range',
+      description:
+        'Play counts per song between two local dates (inclusive), most played first, with editions of a song (single, ' +
+        'album, remaster) folded together. Use this for "my top songs in July" or "most played song last year". ' +
+        'Defaults to the last 30 days. Ranges up to 3,660 days.',
+      inputSchema: {
+        from: day.optional().describe('First day, YYYY-MM-DD; default 29 days ago'),
+        to: day.optional().describe('Last day, YYYY-MM-DD; default today'),
+        limit: z.number().int().min(1).max(500).optional().describe('Default 20'),
+      },
+      annotations: STORED,
+    },
+    ({ from, to, limit = 20 }) => attempt(async () => stripNoise(await client.get('top-tracks', { from, to, limit, ...tz }))),
+  );
+
+  server.registerTool(
     'daily_play_counts',
     {
       title: 'Plays per day, week or month',

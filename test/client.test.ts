@@ -44,7 +44,7 @@ describe('WarehouseClient', () => {
 
   it.each([
     [401, { error: 'Unauthorized' }, /rejected the token/],
-    [403, { error: 'range not computed' }, /list_wrapped_ranges/],
+    [403, { error: 'This range has not been computed.' }, /computed\. A read token/],
     [400, { error: 'q is required' }, /400: q is required/],
     [429, { error: 'Spotify upstream: rate_limited' }, /rate limit/],
   ])('explains a %i', async (status, body, message) => {
