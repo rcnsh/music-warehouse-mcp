@@ -88,6 +88,11 @@ git clone https://github.com/rcnsh/music-warehouse-mcp && cd music-warehouse-mcp
 npm install          # also builds dist/
 ```
 
+MCP clients run `dist/index.js` directly, so after a `git pull` run
+`npm run build` and restart the client. If you forget, the server notices that
+`src/` is newer than `dist/` when it starts, says so on stderr, and asks the
+agent to tell you.
+
 ### 2. Get a read token
 
 **Sign in with Spotify** (easiest). Use the Spotify account that owns the
@@ -98,14 +103,17 @@ npm run login -- --url https://music-warehouse.<you>.workers.dev
 ```
 
 It opens your browser (and prints the URL in case it doesn't), and once you
-approve, saves a read token for that warehouse to
+approve, saves a read token for that warehouse. On macOS it goes in the
+Keychain (service `music-warehouse-mcp`, your Worker's host as the account),
+replacing any token there. Elsewhere it goes in
 `~/.config/music-warehouse-mcp/tokens.json` (`$XDG_CONFIG_HOME` if set),
-readable only by you. The token is listed on the warehouse as
+readable only by you. A token an older version saved to that file on macOS is
+moved to the Keychain the first time the server uses it, and removed from the
+file once the Keychain has it. The token is listed on the warehouse as
 `MCP (<hostname>)` (see the warehouse's
 [device tokens](https://github.com/rcnsh/music-warehouse#device-tokens)); pass
 `--name` to choose another. It expires after 90 days: the tools then say so,
-and you run the same command again. The server reads the file on every call,
-so a new sign-in needs no restart.
+and you run the same command again. A new sign-in needs no restart.
 
 `--url` defaults to `MUSIC_WAREHOUSE_URL`. If you install the clone globally
 (`npm install -g .`), the same command is
@@ -120,7 +128,7 @@ security add-generic-password -s music-warehouse-mcp -a music-warehouse.<you>.wo
 ```
 
 Elsewhere, set `MUSIC_WAREHOUSE_TOKEN` in the MCP client's config instead (see
-[Configuration](#configuration)). Either one wins over a signed-in token.
+[Configuration](#configuration)). Either one wins over a token in the file.
 
 > [!IMPORTANT]
 > Use a read token, never `ADMIN_TOKEN`: nothing here needs more.
@@ -183,28 +191,34 @@ answer. Or explore interactively with `npm run inspect`.
 | `MUSIC_WAREHOUSE_URL` | yes | The Worker's origin. Must be `https`, except on loopback (`http://127.0.0.1:8787` for `wrangler dev`). |
 | `MUSIC_WAREHOUSE_TOKEN` | no | A read token, overriding the Keychain and a signed-in token. |
 | `MUSIC_WAREHOUSE_TZ` | no | IANA zone for local dates and times. Defaults to the system's. |
-| `XDG_CONFIG_HOME` | no | Where `login` saves tokens, under `music-warehouse-mcp/`. Defaults to `~/.config`. |
+| `XDG_CONFIG_HOME` | no | Where `login` saves tokens when not on macOS, under `music-warehouse-mcp/`. Defaults to `~/.config`. |
+| `MUSIC_WAREHOUSE_KEYCHAIN` | no | `off` keeps `login` out of the macOS Keychain, using the file instead. |
 
 The token is the first of:
 
 1. `MUSIC_WAREHOUSE_TOKEN`.
-2. The macOS Keychain entry for the Worker's host (service `music-warehouse-mcp`).
-3. The token `npm run login` saved for the Worker's origin. Tokens are saved
-   per origin, so one is only ever sent to the warehouse that minted it.
+2. The macOS Keychain entry for the Worker's host (service `music-warehouse-mcp`),
+   where `npm run login` saves it on macOS.
+3. The token `npm run login` saved in the file for the Worker's origin. Tokens
+   are saved per origin, so one is only ever sent to the warehouse that minted
+   it.
 
 A missing or expired token doesn't stop the server starting: each tool says how
-to provide one, and the next call picks it up without a restart. A rejected
-token (401) names the login command.
+to provide one, and a call soon after (the Keychain is asked again after 30 s)
+picks it up without a restart. A rejected token (401) names the login command,
+and the next call looks the token up afresh.
 
 ## Tools
 
 Fifteen tools, all read-only. Dates are `YYYY-MM-DD` local days in the
-configured zone.
+configured zone. Tools that take or return dates include `today` and `tz` in
+their result, read at call time, so a server left running for days never
+works from a stale date.
 
 | Tool | Answers | Worker route |
 |---|---|---|
 | `search` | Artists and songs by name, with all-time plays. The way in to the history tools. | `/api/search` |
-| `get_plays` | Individual plays, newest first, in a window. Pages with `next_before`. | `/api/plays` |
+| `get_plays` | Individual plays, newest first, in a window, up to 200 a page. Pages with `next_before`; `include_context` adds the playlist or album each was played from. | `/api/plays` |
 | `top_artists` | Plays per artist between two dates. | `/api/top-artists` |
 | `top_tracks` | Plays per song between two dates, editions folded. | `/api/top-tracks` |
 | `upcoming_concerts` | Ticketmaster gigs in the regions your warehouse watches, for your top artists; `since` for what's new. | `/api/concerts` |
@@ -227,6 +241,16 @@ When a tool fails, its message says why and what to do: a rejected token names
 `npm run login`, a lapsed grant names `npm run authorize` in the
 music-warehouse repo, a stat still computing is waited out (up to 25 s) before
 giving up.
+
+Names in results (tracks, artists, playlists, concerts) are other people's
+text, so each stays in its own field, and the server's instructions tell the
+agent to treat results as data, never as instructions.
+
+`get_plays` pages with the Worker's own `next_before` cursor when it sends one.
+An older Worker only pages by millisecond, which would skip plays sharing the
+last row's millisecond (common in imported history), so for those the server
+issues its own cursor (`mcp:<ms>:<track ids>`) and drops plays it already
+returned.
 
 ## Development
 
