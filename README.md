@@ -134,7 +134,7 @@ Fifteen tools, all read-only. Dates are `YYYY-MM-DD` local days in the configure
 | `get_plays` | Individual plays, newest first, in a window. Pages with `next_before`. | `/api/plays` |
 | `top_artists` | Plays per artist between two dates. | `/api/top-artists` |
 | `top_tracks` | Plays per song between two dates, editions folded. | `/api/top-tracks` |
-| `upcoming_concerts` | Ticketmaster gigs in Singapore and London for your top artists; `since` for what's new. | `/api/concerts` |
+| `upcoming_concerts` | Ticketmaster gigs in the regions your warehouse watches, for your top artists; `since` for what's new. | `/api/concerts` |
 | `daily_play_counts` | Plays per day, or summed per week or month, with a total. | `/api/daily` |
 | `artist_history` | One artist's plays, minutes, first and last play, months, top songs. | `/api/artist` |
 | `track_history` | The same for one song, editions folded together. | `/api/track` |

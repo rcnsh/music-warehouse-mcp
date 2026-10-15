@@ -204,11 +204,16 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
     {
       title: 'Upcoming concerts',
       description:
-        'Upcoming Ticketmaster music events, in Singapore and within 50 km of London, for the ~80 artists played most over ' +
-        'the last year; soonest first, refreshed daily. `since` keeps only events first seen on or after that date, to ' +
-        "answer what's new. An artist absent here may simply not be on Ticketmaster under the same name.",
+        'Upcoming Ticketmaster music events in the regions the warehouse is configured to watch, for the ~80 artists ' +
+        'played most over the last year; soonest first, refreshed daily. The response lists those regions (key and ' +
+        "label). `since` keeps only events first seen on or after that date, to answer what's new. An artist absent " +
+        'here may simply not be on Ticketmaster under the same name.',
       inputSchema: {
-        region: z.enum(['singapore', 'london']).optional().describe('Default both'),
+        region: z
+          .string()
+          .regex(/^[a-z0-9-]{1,32}$/)
+          .optional()
+          .describe('One region key from a previous response; default all'),
         since: day.optional().describe('Only events first seen on or after this local date'),
       },
       annotations: STORED,
@@ -234,7 +239,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
       description:
         'All-time aggregates, refreshed every few hours. on-repeat: songs and albums played far more than usual in the last ' +
         '14 days. rhythm: listening streaks and plays by hour. top-over-time: top artists and songs per quarter and per year. ' +
-        'eras: how taste changed between the two eras the warehouse is configured with (e.g. before and after a move). albums: most-played albums, all time and per year.',
+        'eras: how taste changed in the latest era the warehouse is configured with (e.g. after a move) against the months before it. albums: most-played albums, all time and per year.',
       inputSchema: { name: z.enum(STAT_NAMES) },
       annotations: STORED,
     },
