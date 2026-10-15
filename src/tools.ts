@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { WarehouseClient } from './client.js';
 import {
   type StoredPlay,
+  dateContext,
   formatPlay,
   formatSpotifyArtist,
   formatSpotifyTrack,
@@ -11,8 +12,12 @@ import {
   stripNoise,
   toEpochMs,
 } from './format.js';
+import { pageRequest, pageResult, parseBefore } from './paging.js';
 
 const STAT_NAMES = ['on-repeat', 'rhythm', 'top-over-time', 'eras', 'albums'] as const;
+
+/** The most get_plays returns in one call; a full page of 500 cost about 100 KB of context. */
+export const MAX_PLAYS_PER_PAGE = 200;
 
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'a YYYY-MM-DD date');
 const instant = z.union([z.string(), z.number().int()]);
@@ -54,6 +59,9 @@ export function bucketDays(days: Array<{ day: string; plays: number }>, by: 'day
 
 export function registerTools(server: McpServer, client: WarehouseClient, timeZone: string) {
   const tz = { tz: timeZone };
+  /** A result with today's local date first, read at call time: the server may run for days. */
+  const dated = (body: unknown) =>
+    body && typeof body === 'object' && !Array.isArray(body) ? { ...dateContext(timeZone), ...body } : { ...dateContext(timeZone), result: body };
 
   server.registerTool(
     'search',
@@ -78,28 +86,41 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
     {
       title: 'Individual plays',
       description:
-        'Individual stored plays, newest first, with local time, track, artists and album. Give `after` and `before` to read a ' +
-        'window (newest first within it). If `next_before` is returned, pass it as `before` for the next, older page. ' +
-        'For counts over a range prefer daily_play_counts or top_artists, which are far cheaper.',
+        'Individual stored plays, newest first: local time, track, artists (with ids) and album, and which play of the song ' +
+        'it was. Give `after` and `before` to read a window (newest first within it). If `next_before` is not null, pass ' +
+        'it unchanged as `before` for the next, older page. For counts over a range prefer daily_play_counts, top_tracks ' +
+        'or top_artists, which are far cheaper.',
       inputSchema: {
         after: instant.optional().describe('Only plays after this: YYYY-MM-DD (local midnight), an ISO datetime, or epoch-ms'),
-        before: instant.optional().describe('Only plays before this: same forms as `after`'),
-        limit: z.number().int().min(1).max(500).optional().describe('Default 50'),
+        before: instant
+          .optional()
+          .describe('Only plays before this: same forms as `after`, or the `next_before` of a previous page'),
+        limit: z.number().int().min(1).max(MAX_PLAYS_PER_PAGE).optional().describe('Default 50'),
+        include_context: z
+          .boolean()
+          .optional()
+          .describe('Also give the playlist, album or artist each play was played from (type, name, URI). Default false'),
       },
       annotations: STORED,
     },
-    ({ after, before, limit = 50 }) =>
+    ({ after, before, limit = 50, include_context = false }) =>
       attempt(async () => {
-        const body = await client.get<{ plays: StoredPlay[] }>('plays', {
-          limit,
+        const cursor = before === undefined ? undefined : parseBefore(before, timeZone);
+        const request = pageRequest(cursor, limit);
+        const body = await client.get<{ plays: StoredPlay[]; next_before?: string | number | null }>('plays', {
+          ...request,
           after: after === undefined ? undefined : toEpochMs(after, timeZone),
-          before: before === undefined ? undefined : toEpochMs(before, timeZone),
         });
-        const last = body.plays.at(-1);
+        const page = pageResult(body.plays, {
+          before: cursor,
+          limit,
+          requested: request.limit,
+          nextBefore: 'next_before' in body ? body.next_before : undefined,
+        });
         return {
-          tz: timeZone,
-          plays: body.plays.map((play) => formatPlay(play, timeZone)),
-          next_before: body.plays.length === limit && last ? last.played_at_ms : null,
+          ...dateContext(timeZone),
+          plays: page.rows.map((play) => formatPlay(play, timeZone, include_context)),
+          next_before: page.next_before,
         };
       }),
   );
@@ -118,7 +139,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
       },
       annotations: STORED,
     },
-    ({ from, to, limit }) => attempt(async () => stripNoise(await client.get('top-artists', { from, to, limit, ...tz }))),
+    ({ from, to, limit }) => attempt(async () => dated(stripNoise(await client.get('top-artists', { from, to, limit, ...tz })))),
   );
 
   server.registerTool(
@@ -136,7 +157,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
       },
       annotations: STORED,
     },
-    ({ from, to, limit = 20 }) => attempt(async () => stripNoise(await client.get('top-tracks', { from, to, limit, ...tz }))),
+    ({ from, to, limit = 20 }) => attempt(async () => dated(stripNoise(await client.get('top-tracks', { from, to, limit, ...tz })))),
   );
 
   server.registerTool(
@@ -161,7 +182,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
           ...tz,
         });
         const total = body.days.reduce((sum, d) => sum + d.plays, 0);
-        return { from: body.from, to: body.to, tz: timeZone, total, [`${group_by}s`]: bucketDays(body.days, group_by) };
+        return { ...dateContext(timeZone), from: body.from, to: body.to, total, [`${group_by}s`]: bucketDays(body.days, group_by) };
       }),
   );
 
@@ -182,7 +203,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
     ({ id, name }) =>
       attempt(async () => {
         if (!id && !name) throw new Error('Give an id or a name.');
-        return stripNoise(await client.get('artist', { id, name, ...tz }));
+        return dated(stripNoise(await client.get('artist', { id, name, ...tz })));
       }),
   );
 
@@ -196,7 +217,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
       inputSchema: { id: z.string().min(1).describe('Spotify track id') },
       annotations: STORED,
     },
-    ({ id }) => attempt(async () => stripNoise(await client.get('track', { id, ...tz }))),
+    ({ id }) => attempt(async () => dated(stripNoise(await client.get('track', { id, ...tz })))),
   );
 
   server.registerTool(
@@ -218,7 +239,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
       },
       annotations: STORED,
     },
-    ({ region, since }) => attempt(() => client.get('concerts', { region, since, ...tz })),
+    ({ region, since }) => attempt(async () => dated(await client.get('concerts', { region, since, ...tz }))),
   );
 
   server.registerTool(
@@ -229,7 +250,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
       inputSchema: { date: day.optional().describe('YYYY-MM-DD; default today') },
       annotations: STORED,
     },
-    ({ date }) => attempt(async () => stripNoise(await client.get('on-this-day', { date, ...tz }))),
+    ({ date }) => attempt(async () => dated(stripNoise(await client.get('on-this-day', { date, ...tz })))),
   );
 
   server.registerTool(
@@ -253,7 +274,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
       description: 'The date ranges get_wrapped can summarise: each year with plays, and this year so far.',
       annotations: STORED,
     },
-    () => attempt(() => client.get('wrapped/ranges')),
+    () => attempt(async () => dated(await client.get('wrapped/ranges'))),
   );
 
   server.registerTool(
@@ -309,7 +330,7 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
           { limit },
         );
         return {
-          tz: timeZone,
+          ...dateContext(timeZone),
           plays: body.items.map((item) => ({
             played_at: localTime(Date.parse(item.played_at), timeZone),
             ...formatSpotifyTrack(item.track),
