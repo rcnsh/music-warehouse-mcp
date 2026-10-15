@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clock, localTime, stripNoise, toEpochMs, today } from '../src/format.js';
+import { clock, dateContext, formatPlay, localTime, stripNoise, toEpochMs, today } from '../src/format.js';
 import { bucketDays } from '../src/tools.js';
 
 describe('toEpochMs', () => {
@@ -69,5 +69,28 @@ describe('bucketDays', () => {
       { month: '2024-02', plays: 7 },
     ]);
     expect(bucketDays(days, 'day')).toBe(days);
+  });
+});
+
+describe('formatPlay', () => {
+  const play = {
+    played_at_ms: Date.UTC(2026, 9, 15, 6, 55),
+    track_id: 't',
+    track_name: 'Name',
+    artists: 'A, B',
+    album_name: 'Album',
+    duration_ms: 1,
+    context_type: 'playlist',
+    context_uri: 'spotify:playlist:1',
+    source: 'api',
+  };
+
+  it("falls back to an older Worker's artist string, and leaves out what it lacks", () => {
+    expect(formatPlay(play, 'Asia/Singapore')).toEqual({ played_at: '2026-10-15 14:55', track: 'Name', track_id: 't', artists: 'A, B', album: 'Album' });
+    expect(formatPlay(play, 'UTC', true).context).toEqual({ type: 'playlist', name: null, uri: 'spotify:playlist:1' });
+  });
+
+  it('gives the date and zone at the moment asked', () => {
+    expect(dateContext('Asia/Singapore', Date.UTC(2026, 9, 15, 16))).toEqual({ today: '2026-10-16', tz: 'Asia/Singapore' });
   });
 });

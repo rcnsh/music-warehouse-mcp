@@ -79,27 +79,50 @@ function offsetMs(ms: number, timeZone: string): number {
   return asUtc - Math.floor(ms / 1000) * 1000;
 }
 
+/** The current local date and the zone, for tool results where dates matter. */
+export function dateContext(timeZone: string, now = Date.now()) {
+  return { today: today(timeZone, now), tz: timeZone };
+}
+
+/** One row of /api/plays. The optional fields are absent from Workers that predate them. */
 export interface StoredPlay {
   played_at_ms: number;
   track_id: string;
   track_name: string | null;
+  /** The credited artists joined with commas. */
   artists: string | null;
+  /** The credited artists in order, with ids for artist_history. */
+  artist_list?: Array<{ id: string; name: string }>;
   album_name: string | null;
   duration_ms: number | null;
   context_type: string | null;
   context_uri: string | null;
+  context_name?: string | null;
+  /** Which play of its song this was; null when not numbered yet. */
+  play_number?: number | null;
   source: string;
 }
 
-export function formatPlay(play: StoredPlay, timeZone: string) {
+/**
+ * A play as the agent sees it. Each value stays in its own field, as the
+ * Worker gave it: names are the user's data and never become prose. The
+ * context (playlist, album or artist it was played from) only on request.
+ */
+export function formatPlay(play: StoredPlay, timeZone: string, includeContext = false) {
   return {
     played_at: localTime(play.played_at_ms, timeZone),
-    played_at_ms: play.played_at_ms,
     track: play.track_name,
-    artists: play.artists,
-    album: play.album_name,
     track_id: play.track_id,
-    context: play.context_type ? `${play.context_type} ${play.context_uri ?? ''}`.trim() : null,
+    artists: play.artist_list?.length ? play.artist_list : play.artists,
+    album: play.album_name,
+    ...(play.play_number !== undefined ? { play_number: play.play_number } : {}),
+    ...(includeContext
+      ? {
+          context: play.context_type
+            ? { type: play.context_type, name: play.context_name ?? null, uri: play.context_uri }
+            : null,
+        }
+      : {}),
   };
 }
 

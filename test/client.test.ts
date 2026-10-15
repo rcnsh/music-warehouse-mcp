@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WarehouseClient } from '../src/client.js';
+import { WarehouseClient, WarehouseError } from '../src/client.js';
 import { ConfigError, loadConfig } from '../src/config.js';
 
 const config = { url: 'https://warehouse.test', timeZone: 'UTC', token: async () => 'read-token' };
@@ -50,6 +50,25 @@ describe('WarehouseClient', () => {
   ])('explains a %i', async (status, body, message) => {
     const { client } = clientWith(reply(body, status));
     await expect(client.get('x')).rejects.toThrow(message);
+  });
+
+  it('explains a 200 that is not JSON instead of a parse error', async () => {
+    const { client } = clientWith(new Response('<html>Bad gateway</html>', { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+    const error = await client.get('plays').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WarehouseError);
+    expect((error as Error).message).toMatch(/https:\/\/warehouse\.test answered 200 with an HTML page \(text\/html\)/);
+    const { client: other } = clientWith(new Response('', { status: 200 }));
+    await expect(other.get('plays')).rejects.toThrow(/something that is not JSON/);
+  });
+
+  it('forgets a cached token when the warehouse rejects it', async () => {
+    const forgetToken = vi.fn();
+    const fetch = vi.fn(async () => reply({ error: 'Unauthorized' }, 401));
+    const client = new WarehouseClient({ ...config, forgetToken }, { fetch: fetch as typeof globalThis.fetch });
+    await expect(client.get('x')).rejects.toThrow(/401/);
+    expect(forgetToken).toHaveBeenCalledOnce();
+    const { client: forbidden } = clientWith(reply({ error: 'no' }, 403));
+    await expect(forbidden.get('x')).rejects.toThrow(/403/);
   });
 
   it('reports a network failure with the URL', async () => {

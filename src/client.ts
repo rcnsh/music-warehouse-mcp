@@ -57,7 +57,7 @@ export class WarehouseClient {
       } catch (error) {
         throw new WarehouseError(`Could not reach the warehouse at ${this.config.url}: ${(error as Error).message}`, 0);
       }
-      if (response.ok) return (await response.json()) as T;
+      if (response.ok) return parseJson<T>(response, this.config.url);
 
       const body = (await response.json().catch(() => ({}))) as { error?: string; needs_reauth?: boolean };
       const retryAfterS = Number(response.headers.get('Retry-After'));
@@ -69,8 +69,31 @@ export class WarehouseClient {
           continue;
         }
       }
+      // A rejected token may be a cached one that has since been replaced.
+      if (response.status === 401) this.config.forgetToken?.();
       throw new WarehouseError(explain(response.status, body, retryAfterS, this.config.url), response.status);
     }
+  }
+}
+
+/**
+ * A 200 body as JSON. Something in front of the Worker (a Cloudflare error or
+ * challenge page, a captive portal, a wrong URL) can answer 200 with HTML,
+ * which would otherwise surface as `Unexpected token <`.
+ */
+async function parseJson<T>(response: Response, origin: string): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const type = response.headers.get('Content-Type')?.split(';')[0]?.trim() || 'no content type';
+    const what = /^\s*</.test(text) ? 'an HTML page' : 'something that is not JSON';
+    throw new WarehouseError(
+      `The warehouse at ${origin} answered ${response.status} with ${what} (${type}) instead of JSON. ` +
+        'Something in front of the Worker may have answered (a Cloudflare error or challenge page, a proxy), ' +
+        'or MUSIC_WAREHOUSE_URL may not point at the Worker. Try again shortly; if it persists, check the URL.',
+      response.status,
+    );
   }
 }
 

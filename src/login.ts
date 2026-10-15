@@ -3,7 +3,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { hostname } from 'node:os';
-import { type SavedToken, saveToken, tokenFilePath } from './store.js';
+import {
+  type SavedToken,
+  removeSavedToken,
+  saveKeychainToken,
+  saveToken,
+  tokenFilePath,
+  useKeychain,
+} from './store.js';
 
 /**
  * Sign in with Spotify to get a read token, the way a CLI does OAuth with
@@ -67,6 +74,11 @@ export function parseCallback(url: URL): { code: string } | { error: string; mes
   return null;
 }
 
+/** Text for an HTML page, with the five characters that matter escaped. */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
 function page(response: ServerResponse, status: number, title: string, body: string): void {
   response.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
@@ -75,10 +87,11 @@ function page(response: ServerResponse, status: number, title: string, body: str
     'Referrer-Policy': 'no-referrer',
     Connection: 'close',
   });
+  const [t, b] = [escapeHtml(title), escapeHtml(body)];
   response.end(
-    `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
+    `<!doctype html><meta charset="utf-8"><title>${t}</title>` +
       `<style>body{font:16px/1.5 system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem}</style>` +
-      `<h1>${title}</h1><p>${body}</p>`,
+      `<h1>${t}</h1><p>${b}</p>`,
   );
 }
 
@@ -194,11 +207,28 @@ export interface LoginOptions {
   log?: (line: string) => void;
   timeoutMs?: number;
   tokenFile?: string;
+  /**
+   * Stores the token in the Keychain. Null to always use the token file.
+   * Defaults to the Keychain on macOS.
+   */
+  keychainSave?: ((host: string, token: string) => Promise<void>) | null;
   now?: () => number;
 }
 
-/** Run the whole sign-in and save the token. Returns what was saved. */
-export async function login(options: LoginOptions): Promise<SavedToken> {
+export interface LoginResult {
+  saved: SavedToken;
+  /** `keychain`, or the path of the token file. */
+  storedIn: 'keychain' | string;
+  /** Why the Keychain was not used, when it was tried and failed. */
+  keychainError?: string;
+}
+
+/**
+ * Run the whole sign-in and store the token: in the macOS Keychain where
+ * there is one (replacing any token there for the host, and removing an
+ * older one from the token file), else in the token file.
+ */
+export async function login(options: LoginOptions): Promise<LoginResult> {
   const log = options.log ?? ((line: string) => console.log(line));
   const tokenFile = options.tokenFile ?? tokenFilePath();
   const { verifier, challenge } = createPkce();
@@ -217,8 +247,20 @@ export async function login(options: LoginOptions): Promise<SavedToken> {
       expires_ms: minted.expires_ms,
       saved_ms: (options.now ?? Date.now)(),
     };
+    const keychainSave = options.keychainSave === undefined ? (useKeychain() ? saveKeychainToken : null) : options.keychainSave;
+    let keychainError: string | undefined;
+    if (keychainSave) {
+      try {
+        await keychainSave(new URL(options.url).host, saved.token);
+        // The Keychain wins anyway; this only stops a stale copy lingering in plain text.
+        await removeSavedToken(options.url, tokenFile).catch(() => {});
+        return { saved, storedIn: 'keychain' };
+      } catch (error) {
+        keychainError = (error as Error).message;
+      }
+    }
     await saveToken(options.url, saved, tokenFile);
-    return saved;
+    return { saved, storedIn: tokenFile, ...(keychainError ? { keychainError } : {}) };
   } finally {
     callback.close();
   }
