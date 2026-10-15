@@ -2,7 +2,7 @@
 //
 //   npm run build && MUSIC_WAREHOUSE_URL=https://… node scripts/smoke.mjs
 //
-// The token comes from MUSIC_WAREHOUSE_TOKEN or the Keychain, as for the server.
+// The token comes from MUSIC_WAREHOUSE_TOKEN, the Keychain or `npm run login`, as for the server.
 // Live tools fail (and say why) if the Spotify grant has lapsed; that is not a failure here.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
