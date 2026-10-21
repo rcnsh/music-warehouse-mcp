@@ -10,7 +10,9 @@ describe('parseBefore', () => {
     expect(parseBefore('2024-03-01', 'UTC')).toEqual({ kind: 'instant', ms: Date.UTC(2024, 2, 1) });
     expect(parseBefore('2024-03-01T10:00:00Z', 'UTC')).toEqual({ kind: 'instant', ms: Date.UTC(2024, 2, 1, 10) });
     expect(parseBefore(localCursor(400, ['a', 'b_c-1']), 'UTC')).toEqual({ kind: 'local', ms: 400, seen: ['a', 'b_c-1'] });
-    expect(parseBefore('1729000000000:6rqhFgbb', 'UTC')).toEqual({ kind: 'worker', cursor: '1729000000000:6rqhFgbb' });
+    // The Worker's cursor is `<played_at_ms>.<track_id>`; a track id can itself be all digits.
+    expect(parseBefore('1729000000000.6rqhFgbb', 'UTC')).toEqual({ kind: 'worker', cursor: '1729000000000.6rqhFgbb' });
+    expect(parseBefore('1729000000000.1234567890123456789012', 'UTC')).toEqual({ kind: 'worker', cursor: '1729000000000.1234567890123456789012' });
     expect(() => parseBefore('mcp:x', 'UTC')).toThrow(/Not a cursor/);
     expect(() => parseBefore('2024-02-30', 'UTC')).toThrow(/Not a real date/);
   });

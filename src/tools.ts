@@ -41,8 +41,15 @@ async function attempt(work: () => Promise<unknown>): Promise<CallToolResult> {
   }
 }
 
-/** Sum `{ day, plays }` into weeks (starting Monday) or months. */
-export function bucketDays(days: Array<{ day: string; plays: number }>, by: 'day' | 'week' | 'month') {
+/** A `/api/daily` bucket: `{ day | week | month, plays }`, as the Worker names them. */
+export type DailyBucket = { plays: number } & Record<string, string | number>;
+
+/**
+ * Sum `{ day, plays }` into weeks (from Monday, keyed by that Monday's date)
+ * or months, the way the Worker's `group_by` does. Only for a Worker that
+ * predates `group_by` and answers with days whatever was asked.
+ */
+export function bucketDays(days: Array<{ day: string; plays: number }>, by: 'day' | 'week' | 'month'): DailyBucket[] {
   if (by === 'day') return days;
   const buckets = new Map<string, number>();
   for (const { day, plays } of days) {
@@ -54,7 +61,7 @@ export function bucketDays(days: Array<{ day: string; plays: number }>, by: 'day
     }
     buckets.set(key, (buckets.get(key) ?? 0) + plays);
   }
-  return [...buckets].map(([start, plays]) => ({ [by === 'week' ? 'week_of' : 'month']: start, plays }));
+  return [...buckets].map(([start, plays]) => ({ [by]: start, plays }));
 }
 
 export function registerTools(server: McpServer, client: WarehouseClient, timeZone: string) {
@@ -176,13 +183,18 @@ export function registerTools(server: McpServer, client: WarehouseClient, timeZo
     },
     ({ from, to, group_by = 'day' }) =>
       attempt(async () => {
-        const body = await client.get<{ from: string; to: string; days: Array<{ day: string; plays: number }> }>('daily', {
-          from,
-          to,
-          ...tz,
-        });
-        const total = body.days.reduce((sum, d) => sum + d.plays, 0);
-        return { ...dateContext(timeZone), from: body.from, to: body.to, total, [`${group_by}s`]: bucketDays(body.days, group_by) };
+        // The Worker buckets in the zone's local calendar: `weeks` keyed by
+        // their Monday, `months` by 'YYYY-MM'. Days come back unchanged.
+        const body = await client.get<{
+          from: string;
+          to: string;
+          days?: Array<{ day: string; plays: number }>;
+          weeks?: DailyBucket[];
+          months?: DailyBucket[];
+        }>('daily', { from, to, group_by, ...tz });
+        const buckets = body[`${group_by}s`] ?? bucketDays(body.days ?? [], group_by);
+        const total = buckets.reduce((sum, bucket) => sum + bucket.plays, 0);
+        return { ...dateContext(timeZone), from: body.from, to: body.to, total, [`${group_by}s`]: buckets };
       }),
   );
 

@@ -59,7 +59,7 @@ export class WarehouseClient {
       }
       if (response.ok) return parseJson<T>(response, this.config.url);
 
-      const body = (await response.json().catch(() => ({}))) as { error?: string; needs_reauth?: boolean };
+      const body = (await response.json().catch(() => ({}))) as ErrorBody;
       const retryAfterS = Number(response.headers.get('Retry-After'));
       if (response.status === 503 && !body.needs_reauth && Number.isFinite(retryAfterS) && retryAfterS > 0) {
         const waitMs = Math.min(retryAfterS, 10) * 1000;
@@ -97,12 +97,18 @@ async function parseJson<T>(response: Response, origin: string): Promise<T> {
   }
 }
 
-function explain(
-  status: number,
-  body: { error?: string; needs_reauth?: boolean },
-  retryAfterS: number,
-  origin: string,
-): string {
+/**
+ * The Worker's error body: always `{ error }`, plus `needs_reauth: true` on
+ * the 503 for a lapsed Spotify grant and `retry_after_seconds` (null when
+ * Spotify gave none) on a 429 or 502 from Spotify.
+ */
+interface ErrorBody {
+  error?: string;
+  needs_reauth?: boolean;
+  retry_after_seconds?: number | null;
+}
+
+function explain(status: number, body: ErrorBody, retryAfterS: number, origin: string): string {
   const detail = (body.error ?? 'no detail').replace(/\.$/, '');
   if (status === 401) {
     return (
@@ -118,6 +124,13 @@ function explain(
     const when = Number.isFinite(retryAfterS) && retryAfterS > 0 ? ` Try again in about ${retryAfterS} s.` : '';
     return `Still computing (503): ${detail}.${when}`;
   }
-  if (status === 429) return `Spotify rate limit (429): ${detail}. Try again later.`;
+  if (status === 429 || status === 502) {
+    // Spotify's answer, passed on: the Worker's own rows are unaffected.
+    const seconds = body.retry_after_seconds ?? (Number.isFinite(retryAfterS) && retryAfterS > 0 ? retryAfterS : null);
+    const when = seconds === null ? 'Try again later.' : `Try again in about ${seconds} s.`;
+    return status === 429
+      ? `Spotify rate limit (429): ${detail}. ${when} Stored history still works.`
+      : `Spotify failed upstream (502): ${detail}. ${when} Stored history still works.`;
+  }
   return `Warehouse error ${status}: ${detail}`;
 }
