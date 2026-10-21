@@ -59,10 +59,11 @@ describe('bucketDays', () => {
   ];
 
   it('sums weeks from Monday and calendar months', () => {
+    // Keyed as the Worker's own `group_by` keys them, so either source reads the same.
     expect(bucketDays(days, 'week')).toEqual([
-      { week_of: '2024-01-22', plays: 1 },
-      { week_of: '2024-01-29', plays: 5 },
-      { week_of: '2024-02-05', plays: 4 },
+      { week: '2024-01-22', plays: 1 },
+      { week: '2024-01-29', plays: 5 },
+      { week: '2024-02-05', plays: 4 },
     ]);
     expect(bucketDays(days, 'month')).toEqual([
       { month: '2024-01', plays: 3 },

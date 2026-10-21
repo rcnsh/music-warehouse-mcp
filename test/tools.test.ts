@@ -101,8 +101,10 @@ describe('tools', () => {
   });
 
   it('get_plays converts dates in the zone, keeps rows small, and uses the Worker fields', async () => {
+    // next_before is the Worker's `<played_at_ms>.<track_id>` cursor for the last row.
+    const cursor = `${Date.UTC(2024, 2, 1, 1)}.t${Date.UTC(2024, 2, 1, 1)}`;
     const { call, requests } = await connect({
-      '/api/plays': () => ({ plays: [play(Date.UTC(2024, 2, 1, 2)), play(Date.UTC(2024, 2, 1, 1))], next_before: 'cur-1', _meta: {} }),
+      '/api/plays': () => ({ plays: [play(Date.UTC(2024, 2, 1, 2)), play(Date.UTC(2024, 2, 1, 1))], next_before: cursor, _meta: {} }),
     });
     const body = (await call('get_plays', { after: '2024-03-01', limit: 2 })).json();
     expect(requests[0]!.searchParams.get('after')).toBe(String(Date.UTC(2024, 1, 29, 16)));
@@ -119,7 +121,7 @@ describe('tools', () => {
       album: 'Shelter',
       play_number: 3,
     });
-    expect(body.next_before).toBe('cur-1');
+    expect(body.next_before).toBe(cursor);
   });
 
   it('get_plays gives the context only when asked, as separate fields', async () => {
@@ -132,8 +134,9 @@ describe('tools', () => {
 
   it('get_plays passes the Worker cursor back as it came', async () => {
     const { call, requests } = await connect({ '/api/plays': () => ({ plays: [], next_before: null }) });
-    await call('get_plays', { before: 'opaque~cursor' });
-    expect(requests[0]!.searchParams.get('before')).toBe('opaque~cursor');
+    // The Worker's own shape, which must never be read as an epoch-ms.
+    await call('get_plays', { before: '1709258400000.6rqhFgbbKwnb6WGQSKOCqA' });
+    expect(requests[0]!.searchParams.get('before')).toBe('1709258400000.6rqhFgbbKwnb6WGQSKOCqA');
     await call('get_plays', { before: 1709258400000 });
     expect(requests[1]!.searchParams.get('before')).toBe('1709258400000');
   });
@@ -203,16 +206,19 @@ describe('tools', () => {
     expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({ region: 'london', since: '2026-10-01', tz: 'Asia/Singapore' });
   });
 
-  it('daily_play_counts can sum into months with a total', async () => {
-    const { call } = await connect({
-      '/api/daily': () => ({
+  it('daily_play_counts asks the Worker to group, and totals its buckets', async () => {
+    // What /api/daily?group_by=month answers: `months` in place of `days`, and the grouping echoed.
+    const { call, requests } = await connect({
+      '/api/daily': (url) => ({
         from: '2024-01-30',
         to: '2024-02-01',
-        days: [
-          { day: '2024-01-30', plays: 1 },
-          { day: '2024-01-31', plays: 2 },
-          { day: '2024-02-01', plays: 4 },
+        tz: 'Asia/Singapore',
+        group_by: url.searchParams.get('group_by'),
+        months: [
+          { month: '2024-01', plays: 3 },
+          { month: '2024-02', plays: 4 },
         ],
+        _meta: { rows_read: 2, duration_ms: null },
       }),
     });
     expect((await call('daily_play_counts', { group_by: 'month' })).json()).toEqual({
@@ -226,6 +232,27 @@ describe('tools', () => {
         { month: '2024-02', plays: 4 },
       ],
     });
+    expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({ group_by: 'month', tz: 'Asia/Singapore' });
+  });
+
+  it('daily_play_counts sums the days itself for a Worker that predates group_by', async () => {
+    const { call } = await connect({
+      '/api/daily': () => ({
+        from: '2024-01-29',
+        to: '2024-02-05',
+        days: [
+          { day: '2024-01-29', plays: 1 },
+          { day: '2024-02-04', plays: 2 },
+          { day: '2024-02-05', plays: 4 },
+        ],
+      }),
+    });
+    const body = (await call('daily_play_counts', { group_by: 'week' })).json();
+    expect(body.total).toBe(7);
+    expect(body.weeks).toEqual([
+      { week: '2024-01-29', plays: 3 },
+      { week: '2024-02-05', plays: 4 },
+    ]);
   });
 
   it('rejects input the schema forbids before calling the warehouse', async () => {

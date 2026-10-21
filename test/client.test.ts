@@ -46,10 +46,19 @@ describe('WarehouseClient', () => {
     [401, { error: 'Unauthorized' }, /rejected the token/],
     [403, { error: 'This range has not been computed.' }, /computed\. A read token/],
     [400, { error: 'q is required' }, /400: q is required/],
-    [429, { error: 'Spotify upstream: rate_limited' }, /rate limit/],
+    // The Worker's Spotify errors carry retry_after_seconds, null when Spotify gave none.
+    [429, { error: 'Spotify upstream: rate_limited', retry_after_seconds: 42 }, /rate limit \(429\).*about 42 s/],
+    [429, { error: 'Spotify upstream: quota_exceeded', retry_after_seconds: null }, /rate limit \(429\).*Try again later/],
+    [502, { error: 'Spotify upstream: http', retry_after_seconds: null }, /upstream \(502\).*Stored history still works/],
   ])('explains a %i', async (status, body, message) => {
     const { client } = clientWith(reply(body, status));
     await expect(client.get('x')).rejects.toThrow(message);
+  });
+
+  it('reads Retry-After on a 429 when the body gives no seconds', async () => {
+    const { client, sleep } = clientWith(reply({ error: 'Spotify upstream: rate_limited', retry_after_seconds: null }, 429, { 'Retry-After': '7' }));
+    await expect(client.get('now-playing')).rejects.toThrow(/about 7 s/);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it('explains a 200 that is not JSON instead of a parse error', async () => {
