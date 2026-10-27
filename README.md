@@ -1,4 +1,5 @@
 <div align="center">
+<img src="assets/icon.svg" width="96" height="96" alt="">
 <h1>music-warehouse-mcp</h1>
 <p><strong>Ask your AI agent about years of your own Spotify listening.</strong></p>
 <p>
