@@ -272,7 +272,7 @@ the end-to-end check against a real one.
 | Project | |
 |---|---|
 | [music-warehouse](https://github.com/rcnsh/music-warehouse) | The Worker: records your plays and serves the API |
-| [music-warehouse-gui](https://github.com/rcnsh/music-warehouse-gui) | Native macOS app for browsing your history |
+| [music-warehouse-gui](https://github.com/rcnsh/music-warehouse-gui) | Desktop app for browsing your history on macOS, Linux and Windows |
 | [music-warehouse-mcp](https://github.com/rcnsh/music-warehouse-mcp) (this repo) | MCP server so AI agents can query your history |
 | [music-warehouse-spicetify](https://github.com/rcnsh/music-warehouse-spicetify) | Stats inside the Spotify desktop client |
 | [music-warehouse-wrapped](https://github.com/rcnsh/music-warehouse-wrapped) | Wrapped-style stories for any range, in the browser |
